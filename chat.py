@@ -2,9 +2,11 @@ import socket
 import threading
 import sys
 import time
+import os
+from datetime import datetime
 
 def clear_screen():
-    print("\n" * 80)
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 def get_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -21,132 +23,224 @@ def server():
     HOST = "0.0.0.0"
     PORT = 5566
 
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
-    server.listen()
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
+    try:
+        server_socket.bind((HOST, PORT))
+        server_socket.listen()
+    except Exception as e:
+        print(f"Bind/listen failed: {e}")
+        sys.exit(1)
+
+    clear_screen()
     print("Server started")
     print("IP address →", get_ip())
     print("Port       →", PORT)
-    print("Waiting for people to join...\n")
+    print("\nAdmin commands (type in this console):")
+    print("  clear          - clear console")
+    print("  list           - show online nicknames")
+    print("  kick <name>    - kick user by nickname")
+    print("  msgall <text>  - send message to everyone")
+    print("  whois <name>   - show detailed info about user")
+    print("  restart        - close all clients, keep server running")
+    print("  help           - show this list again")
+    print("  shutdown       - stop server")
+    print("-" * 60)
+    print("Waiting for connections...\n")
 
     clients = []
     nicknames = []
+    addresses = []
+    join_times = []  # new: store join datetime for each client
 
-    def broadcast(message):
+    def broadcast(message, exclude_client=None):
         for client in clients:
-            try:
-                client.send(message)
-            except:
-                pass
+            if client != exclude_client:
+                try:
+                    client.send(message)
+                except:
+                    pass
 
     def handle(client):
+        index = clients.index(client)
+        nickname = nicknames[index]
+
         while True:
             try:
                 message = client.recv(1024)
                 if not message:
                     break
-                broadcast(message)
+                broadcast(message, client)
             except:
-                index = clients.index(client)
-                clients.remove(client)
-                client.close()
-                nickname = nicknames[index]
-                broadcast(f"{nickname} left the chat.".encode("utf-8"))
-                nicknames.remove(nickname)
                 break
+
+        # Cleanup
+        try:
+            clients.remove(client)
+            nicknames.remove(nickname)
+            addresses.pop(index)
+            join_times.pop(index)
+            client.close()
+            broadcast(f"{nickname} left the chat.".encode("utf-8"))
+            print(f"{nickname} disconnected")
+        except:
+            pass
+
+    def accept_connections():
+        while True:
+            try:
+                client, address = server_socket.accept()
+                print(f"New connection from {address}")
+
+                client.send("NICK".encode("utf-8"))
+                nickname_raw = client.recv(1024).decode("utf-8").strip()
+
+                if not nickname_raw:
+                    client.close()
+                    continue
+
+                nickname = nickname_raw
+
+                clients.append(client)
+                nicknames.append(nickname)
+                addresses.append(address)
+                join_times.append(datetime.now())  # record join time
+
+                print(f"{nickname} joined")
+                broadcast(f"{nickname} joined the chat!".encode("utf-8"))
+                client.send("Connected to server!".encode("utf-8"))
+
+                thread = threading.Thread(target=handle, args=(client,))
+                thread.daemon = True
+                thread.start()
+
+            except Exception as e:
+                print(f"Accept error: {e}")
+                break
+
+    accept_thread = threading.Thread(target=accept_connections, daemon=True)
+    accept_thread.start()
 
     while True:
         try:
-            client, address = server.accept()
-            print(f"Connected with {address}")
+            cmd_input = input("").strip()
+            if not cmd_input:
+                continue
 
-            client.send("NICK".encode("utf-8"))
-            nickname = client.recv(1024).decode("utf-8").strip()
+            cmd_parts = cmd_input.split(" ", 1)
+            cmd = cmd_parts[0].lower()
+            arg = cmd_parts[1] if len(cmd_parts) > 1 else ""
 
-            nicknames.append(nickname)
-            clients.append(client)
+            if cmd == "clear":
+                clear_screen()
+                print("Console cleared\n")
 
-            print(f"Nickname is {nickname}")
-            broadcast(f"{nickname} joined the chat!".encode("utf-8"))
-            client.send("Connected to server!".encode("utf-8"))
+            elif cmd == "help":
+                print("\nAdmin commands:")
+                print("  clear          - clear console")
+                print("  list           - show online nicknames")
+                print("  kick <name>    - kick user by nickname")
+                print("  msgall <text>  - send message to everyone")
+                print("  whois <name>   - show detailed info about user")
+                print("  restart        - close all clients, keep server running")
+                print("  shutdown       - stop server")
+                print()
 
-            thread = threading.Thread(target=handle, args=(client,))
-            thread.daemon = True
-            thread.start()
-
-        except:
-            break
-
-def client():
-    clear_screen()
-    print("Simple Chat Client")
-    print("-------------------\n")
-
-    HOST = input("Server IP: ").strip()
-    if not HOST:
-        HOST = "127.0.0.1"
-
-    try:
-        PORT = int(input("Port (usually 5566): ").strip() or "5566")
-    except:
-        PORT = 5566
-
-    nickname = input("Choose your nickname: ").strip()
-    if not nickname:
-        nickname = "User" + str(int(time.time()) % 10000)
-
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    try:
-        client.connect((HOST, PORT))
-    except:
-        print("\nCannot connect. Is the server running?")
-        print("Press Enter to exit...")
-        input()
-        sys.exit()
-
-    def receive():
-        while True:
-            try:
-                message = client.recv(1024).decode("utf-8")
-                if message == "NICK":
-                    client.send(nickname.encode("utf-8"))
+            elif cmd == "list":
+                if nicknames:
+                    print("Online users:")
+                    for nick in nicknames:
+                        print(f"  {nick}")
                 else:
-                    print(message)
-            except:
-                print("Lost connection to server.")
-                client.close()
-                break
+                    print("No users online")
+                print()
 
-    receive_thread = threading.Thread(target=receive, daemon=True)
-    receive_thread.start()
+            elif cmd == "kick" and arg:
+                target = arg.strip()
+                if target in nicknames:
+                    index = nicknames.index(target)
+                    client = clients[index]
+                    try:
+                        client.send("You were kicked by admin.".encode("utf-8"))
+                        client.close()
+                    except:
+                        pass
+                    nicknames.pop(index)
+                    clients.pop(index)
+                    addresses.pop(index)
+                    join_times.pop(index)
+                    broadcast(f"{target} was kicked by admin.".encode("utf-8"))
+                    print(f"Kicked {target}")
+                else:
+                    print(f"User '{target}' not found")
 
-    print("\nYou are connected! Type messages and press Enter.")
-    print("Type /quit to leave.\n")
+            elif cmd == "msgall" and arg:
+                message = f"[SERVER] {arg}"
+                broadcast(message.encode("utf-8"))
+                print(f"Sent to all: {arg}")
 
-    while True:
-        message = input("")
-        if message.lower() in ["/quit", "/exit", "quit", "exit"]:
-            client.send(f"{nickname} left the chat.".encode("utf-8"))
-            client.close()
-            break
-        if message.strip():
-            client.send(f"{nickname}: {message}".encode("utf-8"))
+            elif cmd == "whois" and arg:
+                target = arg.strip()
+                if target in nicknames:
+                    index = nicknames.index(target)
+                    addr = addresses[index]
+                    join_time = join_times[index]
+                    time_online = datetime.now() - join_time
+                    hours, remainder = divmod(time_online.seconds, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    online_str = f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s"
 
+                    print(f"User: {target}")
+                    print(f"  IP: {addr[0]}")
+                    print(f"  Port: {addr[1]}")
+                    print(f"  Joined: {join_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"  Time online: {online_str}")
+                    print(f"  Socket active: {client.fileno() if client.fileno() != -1 else 'closed'}")
+                else:
+                    print(f"User '{target}' not found")
+
+            elif cmd == "restart":
+                print("Restarting connections...")
+                broadcast("Server is restarting connections...".encode("utf-8"))
+                for client in clients[:]:
+                    try:
+                        client.close()
+                    except:
+                        pass
+                clients.clear()
+                nicknames.clear()
+                addresses.clear()
+                join_times.clear()
+                print("All clients disconnected. Accepting new connections.")
+
+            elif cmd == "shutdown":
+                print("Shutting down...")
+                broadcast("Server is shutting down.".encode("utf-8"))
+                for client in clients:
+                    try:
+                        client.close()
+                    except:
+                        pass
+                server_socket.close()
+                print("Server stopped.")
+                sys.exit(0)
+
+            else:
+                print("Unknown command. Type 'help' for list.")
+
+        except KeyboardInterrupt:
+            print("\nCtrl+C detected. Shutting down...")
+            broadcast("Server stopped.".encode("utf-8"))
+            for client in clients:
+                try:
+                    client.close()
+                except:
+                    pass
+            server_socket.close()
+            sys.exit(0)
+        except Exception as e:
+            print(f"Command error: {e}")
 
 if __name__ == "__main__":
-    clear_screen()
-    print("Simple LAN Chat 2025")
-    print("1 = Run as SERVER")
-    print("2 = Run as CLIENT")
-    print("-------------------")
-
-    choice = input("Choose (1 or 2): ").strip()
-
-    if choice == "1":
-        server()
-    elif choice == "2":
-        client()
-    else:
-        print("Wrong choice. Closing.")
+    server()
