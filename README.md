@@ -1,4 +1,4 @@
-# TorChat - Simple LAN / Internet Chat App
+## Simple LAN / Internet Chat App
 
 Desktop chat application with global chat and private messages.  
 Built in Python. Works on Windows (EXE via PyInstaller).  
